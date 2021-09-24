@@ -47,18 +47,42 @@ confirm:
 ########################################################################################################################
 # Core Dependencies
 GIT  ?= $(shell which git)
-DOCKER  ?= $(shell which docker)
+DOCKER ?= $(shell which docker)
+AWS-CLI ?= $(shell which aws)
 
-# Ensures git is installed - does not enforce version, please use latest
-git:
-ifeq (, $(GIT))
-	$(error "Docker is not installed or incorrectly configured. https://www.docker.com/")
-#else
-#	@$(DOCKER) --version
+# Ensures that all dependencies are installed
+prereqs: git docker aws-cli ssh-pub-key
+
+docker:
+ifeq (, $(DOCKER))
+	@echo "\033[31mX Docker is not installed or incorrectly configured. https://www.docker.com/ \033[0m"
+else
+	@echo "\033[32m✔ Docker\033[0m"
 endif
 
-EXECUTABLES = $(GIT) $(DOCKER) aws
-K := $(foreach exec,$(EXECUTABLES),\
+git:
+ifeq (, $(GIT))
+	@echo "\033[31mX Git is not installed or incorrectly configured. https://git-scm.com/downloads/ \033[0m"
+else
+	@echo "\033[32m✔ Git\033[0m"
+endif
+
+aws-cli:
+ifeq (, $(AWS-CLI))
+	@echo "\033[31mX AWS (CLI) is not installed or incorrectly configured. https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html/ \033[0m"
+else
+	@echo "\033[32m✔ AWS (CLI)\033[0m"
+endif
+
+ssh-pub-key:
+ifeq (,$(wildcard ~/.ssh/id_rsa.pub))
+	@echo "\033[31mX SSH Public Key is not found here: ~/.ssh/id_rsa.pub \033[0m"
+else
+	@echo "\033[32m✔ SSH Public Key\033[0m"
+endif
+
+#EXECUTABLES = $(GIT) $(DOCKER) aws
+#K := $(foreach exec,$(EXECUTABLES),\
         $(if $(shell which $(exec)),some string,$(error "No $(exec) found in PATH. Please install it.")))
 
 # This ensures we include main.mk and variables.mk only if it's there. If not we don't error out (IE in case of bootstrap)
