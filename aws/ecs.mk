@@ -22,10 +22,10 @@ ECS_SERVICE_TASK_ID = $(eval ECS_SERVICE_TASK_ID := $(shell $(AWS) ecs run-task 
 ECS_SERVICE_TASK_DEFINITION_ARN = $(shell $(AWS) ecs describe-task-definition --task-definition $(ECS_TASK_NAME) | $(JQ) -r '.taskDefinition.taskDefinitionArn')
 
 ECS_SERVICE_RUNNING_TASK_ID = $(eval ECS_SERVICE_RUNNING_TASK_ID := $(shell $(AWS) ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --service-name $(ECS_SERVICE_NAME) --desired-status "RUNNING" | $(JQ) -r '.taskArns[]' | $(CUT) -d'/' -f3))$(ECS_SERVICE_RUNNING_TASK_ID)
-CMD_SSM_TO_FARGATE_TASK ?= aws --profile $(AWS_PROFILE) ecs execute-command --cluster $(ECS_CLUSTER_NAME) --task $(ECS_SERVICE_RUNNING_TASK_ID) --container $(SVC) --command "/bin/sh" --interactive
+CMD_SSM_TO_FARGATE_TASK ?= aws ecs $(AWS_CLI_PROFILE) execute-command --cluster $(ECS_CLUSTER_NAME) --task $(ECS_SERVICE_RUNNING_TASK_ID) --container $(SVC) --command "/bin/sh" --interactive
 
-CMD_ECS_SERVICE_DEPLOY = @$(ECS) deploy --profile $(AWS_PROFILE) $(ECS_CLUSTER_NAME) $(ECS_SERVICE_NAME) --task $(ECS_SERVICE_TASK_DEFINITION_ARN) --image $(SVC) $(DOCKER_REGISTRY)/$(DOCKER_IMAGE_NAME):$(TAG) --diff --timeout $(ECS_DEPLOY_TIMEOUT) --rollback -e $(SVC) DD_VERSION $(TAG)
-CMD_ECS_SERVICE_REDEPLOY = @$(ECS) deploy --profile $(AWS_PROFILE) --region $(AWS_REGION)  $(ECS_CLUSTER_NAME) $(ECS_SERVICE_NAME) --diff --rollback
+CMD_ECS_SERVICE_DEPLOY = @$(ECS) deploy $(AWS_CLI_PROFILE) $(ECS_CLUSTER_NAME) $(ECS_SERVICE_NAME) --task $(ECS_SERVICE_TASK_DEFINITION_ARN) --image $(SVC) $(DOCKER_REGISTRY)/$(DOCKER_IMAGE_NAME):$(TAG) --diff --timeout $(ECS_DEPLOY_TIMEOUT) --rollback -e $(SVC) DD_VERSION $(TAG)
+CMD_ECS_SERVICE_REDEPLOY = @$(ECS) deploy $(AWS_CLI_PROFILE) --region $(AWS_REGION)  $(ECS_CLUSTER_NAME) $(ECS_SERVICE_NAME) --diff --rollback
 CMD_ECS_SERVICE_DOCKER_BUILD = DOCKER_BUILDKIT=$(ENABLE_BUILDKIT) $(DOCKER) build \
 	. \
 	-t $(DOCKER_IMAGE_NAME) \
@@ -55,7 +55,7 @@ CMD_ECS_SERVICE_TASK_RUN = @echo "Task $(ECS_SERVICE_TASK_ID) for definition $(E
 
 CMD_ECR_DOCKER_PURGE_CACHE = @echo "Removing '$(TAG_LATEST)' tag from AWS ECR" && $(AWS) ecr batch-delete-image --repository-name $(DOCKER_IMAGE_NAME) --image-ids imageTag=$(TAG_LATEST) | $(JQ) -er 'select(.failures[].failureReason != null) | def yellow: "\u001b[33m"; def reset: "\u001b[0m"; yellow + "[WARNING]:", reset + "\( .failures[].failureReason)"' || echo "\033[32m[OK]\033[0m '$(TAG_LATEST)' tag was removed from AWS ECR"
 
-CMD_ECS_SERVICE_SCALE = @$(ECS) scale --profile $(AWS_PROFILE) $(ECS_CLUSTER_NAME) $(ECS_TASK_NAME) $(SCALE)
+CMD_ECS_SERVICE_SCALE = @$(ECS) scale $(AWS_CLI_PROFILE) $(ECS_CLUSTER_NAME) $(ECS_TASK_NAME) $(SCALE)
 CMD_ECS_SERVICE_DESTROY = echo "Destroy $(SVC) is not implemented"
 
 CMD_ECS_SERVICE_LOCAL_UP = $(ECS_CLI) local up --task-def-remote $(ECS_SERVICE_TASK_DEFINITION_ARN) --force

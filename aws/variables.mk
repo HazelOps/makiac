@@ -2,6 +2,7 @@
 ##################################################################
 # main variables
 AWS_CLI_VERSION ?= 2.2.0
+AWS_MFA_ENABLED ?= false
 
 # ecs variables 
 SCALE ?= 3

@@ -4,18 +4,51 @@ ifndef AWS_REGION
 $(error Please set AWS_REGION via `export AWS_REGION=<aws_region>` or use direnv. This is nessesary for additional tools that are not able to read a region from your AWS profile)
 endif
 
+ifeq ($(AWS_MFA_ENABLED),"true")
+export AWS_ACCESS_KEY_ID=$(shell echo $(MFA_AWS_ACCESS_KEY_VALUE))
+export AWS_SECRET_ACCESS_KEY=$(shell echo $(MFA_AWS_SECRET_ACCESS_KEY_VALUE))
+export AWS_SESSION_TOKEN=$(shell echo $(MFA_AWS_SESSION_TOKEN_VALUE))
+endif
 # Macroses
 ########################################################################################################################
 # We don't check for AWS_PROFILE, but instead we assume the profile name.
 # You can override it, although it's recommended to have a profile per environment in your ~/.aws/credentials
 AWS_PROFILE ?= $(NAMESPACE)-$(ENV)
+AWS_CLI_PROFILE ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then echo ""; else echo "--profile $(AWS_PROFILE)"; fi))
 AWS_USER ?= $(shell [ -f ~/.aws/credentials ] && $(AWS) iam get-user | $(JQ) -r ".User.UserName")
 AWS_ACCOUNT ?= $(shell [ -f ~/.aws/credentials ] && $(AWS) sts get-caller-identity | $(JQ) -r '.Account' || echo "nil" )
 
 AWS_DEV_ENV_NAME ?= $(shell [ -f ~/.aws/credentials ] && $(AWS) iam list-user-tags --user-name $(AWS_USER) | ( $(JQ) -e -r '.Tags[] | select(.Key == "devEnvironmentName").Value') || echo "$(ENV) (User env is not configured)")
 
+# AWS MFA
+MFA_DEVICE_ARN ?= 
+MFA_TOKEN_CODE ?= $(eval MFA_TOKEN_CODE := $(shell bash -c 'read -p "Enter MFA token: " token; echo $$token'))$(MFA_TOKEN_CODE)
+MFA_GET_SESSION_TOKEN ?= $(eval MFA_GET_SESSION_TOKEN := $(shell echo $$(aws sts get-session-token --serial-number ${MFA_DEVICE_ARN} --token-code $(MFA_TOKEN_CODE) | $(JQ) 'map_values(tostring)' | $(JQ) .Credentials)))$(MFA_GET_SESSION_TOKEN)
+MFA_AWS_ACCESS_KEY_ID ?= $(shell echo $(MFA_GET_SESSION_TOKEN) | $(JQ) .AccessKeyId | xargs > ~/.aws/mfa_aws_access_key)
+MFA_AWS_SECRET_ACCESS_KEY ?= $(shell echo $(MFA_GET_SESSION_TOKEN) | $(JQ) .SecretAccessKey | xargs > ~/.aws/mfa_aws_secret_access_key)
+MFA_AWS_SESSION_TOKEN ?= $(shell echo $(MFA_GET_SESSION_TOKEN) | $(JQ) .SessionToken | xargs > ~/.aws/mfa_aws_session_token)
+MFA_AWS_EXPIRATION ?= $(shell echo $(MFA_GET_SESSION_TOKEN) | $(JQ) .Expiration | xargs)
+
+MFA_AWS_ACCESS_KEY_VALUE ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then cat ~/.aws/mfa_aws_access_key; else echo ""; fi)) #$$(cat ~/.aws/mfa_aws_access_key)
+MFA_AWS_SECRET_ACCESS_KEY_VALUE ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then cat ~/.aws/mfa_aws_secret_access_key; else echo ""; fi)) #$$(cat ~/.aws/mfa_aws_secret_access_key)
+MFA_AWS_SESSION_TOKEN_VALUE ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then cat ~/.aws/mfa_aws_session_token; else echo ""; fi)) #$$(cat ~/.aws/mfa_aws_session_token)
+
+
 # $(AWS_ARGS) definition see in .infra/icmk/aws/localstack.mk
-AWS_ARM ?= $(DOCKER) run --rm --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" --platform "linux/amd64" \
+AWS_ARM ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then echo "$(AWS_ARM_WITH_MFA)"; else echo "$(AWS_ARM_NO_MFA)"; fi))
+AWS_ARM_WITH_MFA ?= $(DOCKER) run --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" --platform "linux/amd64" \
+	-v $(HOME)/.aws/:/.aws \
+	-i \
+	-e AWS_PROFILE="$(AWS_PROFILE)" \
+	-e AWS_REGION="$(AWS_REGION)" \
+	-e AWS_ACCESS_KEY_ID="$(MFA_AWS_ACCESS_KEY_VALUE)" \
+	-e AWS_SECRET_ACCESS_KEY="$(MFA_AWS_SECRET_ACCESS_KEY_VALUE)" \
+	-e AWS_SESSION_TOKEN="$(MFA_AWS_SESSION_TOKEN_VALUE)" \
+	-e AWS_CONFIG_FILE="/.aws/config" \
+	-e AWS_SHARED_CREDENTIALS_FILE="/.aws/credentials" \
+	amazon/aws-cli:$(AWS_CLI_VERSION) $(AWS_ARGS)
+
+AWS_ARM_NO_MFA ?= $(DOCKER) run --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" --platform "linux/amd64" \
 	-v $(HOME)/.aws/:/.aws \
 	-i \
 	-e AWS_PROFILE="$(AWS_PROFILE)" \
@@ -24,7 +57,21 @@ AWS_ARM ?= $(DOCKER) run --rm --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)
 	-e AWS_SHARED_CREDENTIALS_FILE="/.aws/credentials" \
 	amazon/aws-cli:$(AWS_CLI_VERSION) $(AWS_ARGS)
 
-AWS_DEFAULT ?= $(DOCKER) run --rm --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" \
+
+AWS_DEFAULT ?= $(shell echo $$(if [ "$(AWS_MFA_ENABLED)" = "true" ]; then echo "$(AWS_DEFAULT_WITH_MFA)"; else echo "$(AWS_DEFAULT_NO_MFA)"; fi))
+AWS_DEFAULT_WITH_MFA ?= $(DOCKER) run --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" \
+	-v $(HOME)/.aws/:/.aws \
+	-i \
+	-e AWS_PROFILE="$(AWS_PROFILE)" \
+	-e AWS_REGION="$(AWS_REGION)" \
+	-e AWS_ACCESS_KEY_ID="$(MFA_AWS_ACCESS_KEY_VALUE)" \
+	-e AWS_SECRET_ACCESS_KEY="$(MFA_AWS_SECRET_ACCESS_KEY_VALUE)" \
+	-e AWS_SESSION_TOKEN="$(MFA_AWS_SESSION_TOKEN_VALUE)" \
+	-e AWS_CONFIG_FILE="/.aws/config" \
+	-e AWS_SHARED_CREDENTIALS_FILE="/.aws/credentials" \
+	amazon/aws-cli:$(AWS_CLI_VERSION) $(AWS_ARGS)
+
+AWS_DEFAULT_NO_MFA ?= $(DOCKER) run --user "$(CURRENT_USER_ID):$(CURRENT_USERGROUP_ID)" \
 	-v $(HOME)/.aws/:/.aws \
 	-i \
 	-e AWS_PROFILE="$(AWS_PROFILE)" \
@@ -38,9 +85,13 @@ AWS ?= $(shell echo $$(if [ "$(LINUX_ARCH)" = "arm64" ]; then echo "$(AWS_ARM)";
 CMD_AWS_LOGS_TAIL = @$(AWS) logs tail $(SERVICE_NAME) --follow --format "short"
 CMD_AWS_EC2_IMPORT_KEY_PAIR = @$(AWS) ec2 import-key-pair  --key-name="$(EC2_KEY_PAIR_NAME)" --public-key-material="$(SSH_PUBLIC_KEY_BASE64)"
 
-# VPC settings
-VPC_PUBLIC_SUBNETS ?= $(shell $(AWS) ssm get-parameter --name "/$(ENV)/terraform-output" --with-decryption | $(JQ) -r '.Parameter.Value' | $(BASE64) -d | $(JQ) -r '.vpc_public_subnets.value')
-VPC_PRIVATE_SUBNETS ?= $(shell $(AWS) ssm get-parameter --name "/$(ENV)/terraform-output" --with-decryption | $(JQ) -r '.Parameter.Value' | $(BASE64) -d | $(JQ) -r '.vpc_private_subnets.value')
+
+aws.mfa:
+	$(MFA_AWS_ACCESS_KEY_ID)
+	$(MFA_AWS_SECRET_ACCESS_KEY)
+	$(MFA_AWS_SESSION_TOKEN)
+	@echo "\033[36mMFA Token will be expired at:\033[0m $(MFA_AWS_EXPIRATION)"
+
 
 # Getting OS|Linux info
 OS_NAME ?= $(shell uname -s)
@@ -68,7 +119,7 @@ CMD_SSM_CLEANUP ?= $(shell echo $$(if [ "$(OS_NAME)" = "Linux" ]; then echo "$(S
 # SSM access to Fargate ECS
 SSM_MI_TARGET ?= $(shell $(AWS) ssm describe-instance-information | $(JQ) -er '.InstanceInformationList[] | select(.Name == "$(SVC)" and .PingStatus == "Online") | .InstanceId' > tmp && cat tmp | head -1 && rm -rf tmp || rm -rf tmp)
 # We use local aws-cli here due to interactive actions 
-SSM_TO_FARGATE ?= aws --profile $(AWS_PROFILE) ssm start-session --target $(SSM_MI_TARGET)
+SSM_TO_FARGATE ?= aws $(AWS_CLI_PROFILE) ssm start-session --target $(SSM_MI_TARGET)
 CMD_SSM_TO_FARGATE ?= $(shell echo $$(if [ -z "$(SSM_MI_TARGET)" ]; then echo "echo '[ERROR] SSM mi target is not available now (please try in a minute) or not configured. Exit.'"; else echo "$(SSM_TO_FARGATE)"; fi))
 # Tasks
 ########################################################################################################################
